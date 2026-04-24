@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Path Variable Hardening helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'rupali.lamkhade9@gmail.com' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'name', 'role']) && 
+             data.keys().size() >= 3 &&
+             data.uid is string && data.uid.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.role in ['student', 'counselor', 'admin'] &&
+             (!('email' in data) || (data.email is string && data.email.size() < 100)) &&
+             (!('rank' in data) || data.rank is number) &&
+             (!('exam' in data) || data.exam in ['NEET', 'JEE', 'PCM', 'PCB']) &&
+             (!('category' in data) || (data.category is string && data.category.size() < 50)) &&
+             (!('domicile' in data) || (data.domicile is string && data.domicile.size() < 50)) &&
+             (!('pcm' in data) || (data.pcm is string && data.pcm.size() < 50)) &&
+             (!('pcb' in data) || (data.pcb is string && data.pcb.size() < 50));
+    }
+
+    function isValidDocument(data) {
+      return data.keys().hasAll(['userId', 'docName', 'status']) &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.docName is string && data.docName.size() > 0 && data.docName.size() < 200 &&
+             data.status in ['Pending', 'Uploaded', 'Verified'] &&
+             (!('fileUrl' in data) || (data.fileUrl is string && data.fileUrl.size() < 1000)) &&
+             (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasAll(['senderId', 'receiverId', 'text', 'timestamp']) &&
+             data.senderId == request.auth.uid &&
+             data.receiverId is string && data.receiverId.size() <= 128 &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000 &&
+             data.timestamp == request.time;
+    }
+
+    // --- Collection Rules ---
+
+    // Public Cutoff Data
+    match /cutoffs/{cutoffId} {
+      allow read: if true; // Publicly readable for students to use predictor
+      allow write: if isAdmin();
+    }
+
+    // User Profiles
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin(); // Only admins can list all users
+      
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidUserProfile(incoming()) && incoming().role == 'student';
+      
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && 
+                    isValidUserProfile(incoming()) && (
+                      isAdmin() || (
+                        // Action: Self Update Profile
+                        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'exam', 'rank', 'category', 'domicile', 'email', 'pcm', 'pcb']) &&
+                        incoming().role == existing().role
+                      )
+                    );
+    }
+
+    // Admins (Management)
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Documents (Subcollection of users)
+    match /users/{userId}/documents/{docId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidDocument(incoming());
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) &&
+                    isValidDocument(incoming()) &&
+                    (isAdmin() ||
+                      (incoming().diff(existing()).affectedKeys().hasOnly(['docName', 'fileUrl', 'updatedAt']) &&
+                       incoming().status == existing().status) // Only admin can verify
+                    );
+      allow delete: if isAdmin();
+    }
+
+    // Chats
+    match /chats/{chatId} {
+      allow read: if isSignedIn(); // Broad check, nested rules will protect messages
+    }
+
+    match /chats/{chatId}/messages/{messageId} {
+      allow read: if isSignedIn() && (request.auth.uid == existing().senderId || request.auth.uid == existing().receiverId || isAdmin());
+      allow create: if isSignedIn() && isValidChatMessage(incoming());
+    }
+  }
+}

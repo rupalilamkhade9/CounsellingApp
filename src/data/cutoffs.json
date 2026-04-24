@@ -1,0 +1,65 @@
+[
+  {
+    "id": "1",
+    "collegeName": "AIIMS, New Delhi",
+    "course": "MBBS",
+    "category": "General",
+    "closingRank": 100,
+    "quota": "AIQ",
+    "state": "Delhi"
+  },
+  {
+    "id": "2",
+    "collegeName": "Maulana Azad Medical College",
+    "course": "MBBS",
+    "category": "General",
+    "closingRank": 500,
+    "quota": "AIQ",
+    "state": "Delhi"
+  },
+  {
+    "id": "3",
+    "collegeName": "BJ Medical College, Pune",
+    "course": "MBBS",
+    "category": "General",
+    "closingRank": 12000,
+    "quota": "State",
+    "state": "Maharashtra"
+  },
+  {
+    "id": "4",
+    "collegeName": "Grant Medical College, Mumbai",
+    "course": "MBBS",
+    "category": "OBC",
+    "closingRank": 15000,
+    "quota": "State",
+    "state": "Maharashtra"
+  },
+  {
+    "id": "5",
+    "collegeName": "KEM Hospital, Mumbai",
+    "course": "MBBS",
+    "category": "SC",
+    "closingRank": 25000,
+    "quota": "State",
+    "state": "Maharashtra"
+  },
+  {
+    "id": "6",
+    "collegeName": "IIT Bombay",
+    "course": "Computer Science",
+    "category": "General",
+    "closingRank": 67,
+    "quota": "AIQ",
+    "state": "Maharashtra"
+  },
+  {
+    "id": "7",
+    "collegeName": "COEP Pune",
+    "course": "Mechanical Engineering",
+    "category": "General",
+    "closingRank": 2500,
+    "quota": "State",
+    "state": "Maharashtra"
+  }
+]

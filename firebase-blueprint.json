@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "CollegeCutoff": {
+      "title": "College Cutoff Data",
+      "description": "Historical cutoff information for colleges",
+      "type": "object",
+      "properties": {
+        "collegeName": { "type": "string" },
+        "course": { "type": "string" },
+        "category": { "type": "string" },
+        "closingRank": { "type": "integer" },
+        "quota": { "type": "string", "enum": ["AIQ", "State"] },
+        "state": { "type": "string" },
+        "exam": { "type": "string", "enum": ["NEET", "JEE", "PCM", "PCB"] },
+        "year": { "type": "integer" }
+      },
+      "required": ["collegeName", "course", "closingRank", "quota"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Student or Counselor profile data",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["student", "counselor", "admin"] },
+        "exam": { "type": "string", "enum": ["NEET", "JEE", "PCM", "PCB"] },
+        "rank": { "type": "number" },
+        "category": { "type": "string" },
+        "domicile": { "type": "string" },
+        "pcm": { "type": "string" },
+        "pcb": { "type": "string" }
+      },
+      "required": ["uid", "name", "role"]
+    },
+    "Document": {
+      "title": "User Document",
+      "description": "Uploaded counseling documents",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "docName": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Uploaded", "Verified"] },
+        "fileUrl": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "docName", "status"]
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "Message between student and counselor",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderId", "receiverId", "text", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/cutoffs/{cutoffId}": {
+      "schema": "CollegeCutoff",
+      "description": "Public cutoff data"
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Private user profiles"
+    },
+    "/users/{userId}/documents/{docId}": {
+      "schema": "Document",
+      "description": "User uploaded documents"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Messages in a specific chat session"
+    },
+    "/admins/{adminId}": {
+      "schema": { "type": "object", "properties": { "email": { "type": "string" } } },
+      "description": "Administrative access control documents"
+    }
+  }
+}
