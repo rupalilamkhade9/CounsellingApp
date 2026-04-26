@@ -69,6 +69,36 @@ service cloud.firestore {
              data.timestamp == request.time;
     }
 
+    function isValidShortlist(data) {
+      return data.keys().hasAll(['userId', 'collegeName', 'course', 'savedAt']) &&
+             data.userId == request.auth.uid &&
+             data.collegeName is string && data.collegeName.size() > 0 &&
+             data.course is string && data.course.size() > 0 &&
+             data.savedAt is number;
+    }
+
+    function isValidPredictionHistory(data) {
+      return data.keys().hasAll(['userId', 'timestamp', 'searchParams', 'colleges']) &&
+             data.userId == request.auth.uid &&
+             data.timestamp is number &&
+             data.searchParams is map &&
+             data.colleges is list;
+    }
+
+    function isValidAdminEntry(data) {
+      return data.keys().hasAll(['email']) &&
+             data.keys().size() == 1 &&
+             data.email is string && data.email.size() > 0 && data.email.size() < 100;
+    }
+
+    function isValidConsultationRequest(data) {
+      return data.keys().hasAll(['name', 'mobile', 'timestamp']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 15 &&
+             data.timestamp is number &&
+             (!('userId' in data) || (data.userId == null || (data.userId is string && data.userId.size() <= 128)));
+    }
+
     // --- Collection Rules ---
 
     // Public Cutoff Data
@@ -97,7 +127,10 @@ service cloud.firestore {
     // Admins (Management)
     match /admins/{adminId} {
       allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow create: if isAdmin() && isValidId(adminId) && isValidAdminEntry(incoming());
+      allow update: if isAdmin() && isValidId(adminId) && isValidAdminEntry(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['email']);
+      allow delete: if isAdmin();
     }
 
     // Documents (Subcollection of users)
@@ -119,9 +152,25 @@ service cloud.firestore {
       allow read: if isSignedIn(); // Broad check, nested rules will protect messages
     }
 
+    match /users/{userId}/shortlist/{collegeId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidShortlist(incoming());
+      allow delete: if isSignedIn() && userId == request.auth.uid;
+    }
+    
+    match /users/{userId}/prediction_history/{historyId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidPredictionHistory(incoming());
+    }
+
     match /chats/{chatId}/messages/{messageId} {
       allow read: if isSignedIn() && (request.auth.uid == existing().senderId || request.auth.uid == existing().receiverId || isAdmin());
       allow create: if isSignedIn() && isValidChatMessage(incoming());
+    }
+
+    match /consultation_requests/{requestId} {
+      allow read: if isAdmin();
+      allow create: if isValidConsultationRequest(incoming());
     }
   }
 }

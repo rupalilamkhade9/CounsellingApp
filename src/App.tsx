@@ -3,19 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useMemo, useEffect } from 'react';
-import { 
-  CheckCircle, 
-  MessageSquare, 
-  AlertCircle,
-  FileText,
-  Video,
-  LogOut,
-  Database,
-  Lock
-} from 'lucide-react';
+import { useState, useMemo, useEffect, useCallback, FormEvent } from 'react';
+import { CheckCircle, MessageSquare, AlertCircle, FileText, Video, LogOut, Database, Lock, Star, Download, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { UserProfile, CutoffData } from './types';
+import { UserProfile, CutoffData, ShortlistedCollege } from './types';
+import * as XLSX from 'xlsx';
 import { StrategyPlanner } from './components/StrategyPlanner';
 import { AdminPanel } from './components/AdminPanel';
 import { auth, db } from './lib/firebase';
@@ -33,10 +25,12 @@ import {
   limit,
   doc,
   getDoc,
-  setDoc
+  setDoc,
+  addDoc
 } from 'firebase/firestore';
 import { seedCutoffs } from './lib/seedDatabase';
 import { handleFirestoreError } from './lib/firebaseUtils';
+import { PredictionHistory } from './types';
 
 export default function App() {
   const [track, setTrack] = useState<'AIQ' | 'State'>('AIQ');
@@ -48,8 +42,28 @@ export default function App() {
   const [showResults, setShowResults] = useState(false);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [needsRegistration, setNeedsRegistration] = useState(false);
+  const [registeringData, setRegisteringData] = useState({ name: '', phone: '', category: 'General' });
   const [firestoreCutoffs, setFirestoreCutoffs] = useState<CutoffData[]>([]);
+  const [shortlistedColleges, setShortlistedColleges] = useState<ShortlistedCollege[]>([]);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [consultationName, setConsultationName] = useState('');
+  const [consultationMobile, setConsultationMobile] = useState('');
+  const [showConsultationSuccess, setShowConsultationSuccess] = useState(false);
+  const [isSubmittingConsultation, setIsSubmittingConsultation] = useState(false);
+
+  const fetchShortlist = async (uid: string) => {
+    try {
+      const q = query(collection(db, 'users', uid, 'shortlist'));
+      const querySnapshot = await getDocs(q);
+      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ShortlistedCollege));
+      setShortlistedColleges(data);
+    } catch (error) {
+      console.error("Error fetching shortlist:", error);
+    }
+  };
 
   const fetchCutoffs = async () => {
     try {
@@ -70,23 +84,47 @@ export default function App() {
       const userSnap = await getDoc(userRef);
       if (userSnap.exists()) {
         setUserProfile(userSnap.data() as UserProfile);
+        setNeedsRegistration(false);
+        setShowAuthModal(false);
       } else {
-        // Initialize new user as student by default
-        const newProfile: UserProfile = {
-          uid,
-          name: auth.currentUser?.displayName || 'Candidate',
-          email: auth.currentUser?.email || '',
-          role: 'student'
-        };
-        // Special case for initial admin
-        if (newProfile.email === 'rupali.lamkhade9@gmail.com') {
-          newProfile.role = 'admin';
-        }
-        await setDoc(userRef, newProfile);
-        setUserProfile(newProfile);
+        setNeedsRegistration(true);
+        setRegisteringData({
+          name: auth.currentUser?.displayName || '',
+          phone: '',
+          category: 'General'
+        });
+        setShowAuthModal(true); // Ensure modal is open for registration
       }
     } catch (error) {
       handleFirestoreError(error, 'get', `/users/${uid}`);
+    }
+  };
+
+  const handleRegistration = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      const newProfile: UserProfile = {
+        uid: user.uid,
+        name: registeringData.name,
+        email: user.email || '',
+        phone: registeringData.phone,
+        role: 'student'
+      };
+
+      // Special case for initial admin
+      if (newProfile.email === 'rupali.lamkhade9@gmail.com') {
+        newProfile.role = 'admin';
+      }
+
+      await setDoc(userRef, newProfile);
+      setUserProfile(newProfile);
+      setNeedsRegistration(false);
+      setShowAuthModal(false);
+    } catch (error) {
+      handleFirestoreError(error, 'write', `/users/${user.uid}`);
     }
   };
 
@@ -95,8 +133,11 @@ export default function App() {
       setUser(u);
       if (u) {
         fetchUserProfile(u.uid);
+        fetchShortlist(u.uid);
       } else {
         setUserProfile(null);
+        setShortlistedColleges([]);
+        setNeedsRegistration(false);
       }
     });
 
@@ -117,7 +158,43 @@ export default function App() {
     }
   };
 
-  const logout = () => signOut(auth);
+  const logout = () => {
+    signOut(auth);
+    setUser(null);
+    setUserProfile(null);
+    setShowAuthModal(false);
+  };
+
+  const toggleShortlist = useCallback(async (cutoff: CutoffData) => {
+    if (!user) {
+      login();
+      return;
+    }
+
+    const isShortlisted = shortlistedColleges.find(c => c.id === cutoff.id);
+    const shortlistRef = doc(db, 'users', user.uid, 'shortlist', cutoff.id);
+
+    try {
+      if (isShortlisted) {
+        // Remove
+        const { deleteDoc } = await import('firebase/firestore');
+        await deleteDoc(shortlistRef);
+        setShortlistedColleges(prev => prev.filter(c => c.id !== cutoff.id));
+      } else {
+        // Add
+        const now = Date.now();
+        const newShortlist: ShortlistedCollege = {
+          ...cutoff,
+          userId: user.uid,
+          savedAt: now
+        };
+        await setDoc(shortlistRef, newShortlist);
+        setShortlistedColleges(prev => [...prev, newShortlist]);
+      }
+    } catch (error) {
+      handleFirestoreError(error, 'write', `/users/${user.uid}/shortlist/${cutoff.id}`);
+    }
+  }, [user, shortlistedColleges]);
 
   const handleSeed = async () => {
     setIsSeeding(true);
@@ -134,16 +211,209 @@ export default function App() {
 
   const filteredResults = useMemo(() => {
     if (!rank) return [];
-    const numRank = parseInt(rank);
+    const numRank = parseFloat(rank);
     return firestoreCutoffs.filter(col => {
-      const rankMatch = col.closingRank >= numRank;
       const quotaMatch = col.quota === track;
       const categoryMatch = col.category === category;
-      const courseMatch = exam === 'NEET' || exam === 'PCB' ? col.course === 'MBBS' : (exam === 'JEE' || exam === 'PCM' ? col.course !== 'MBBS' : true);
       
-      return rankMatch && quotaMatch && categoryMatch && courseMatch;
-    }).sort((a, b) => a.closingRank - b.closingRank);
+      // Determine if it's a medical or engineering course
+      const medicalKeywords = ['MBBS', 'BDS', 'BAMS', 'BHMS', 'Nursing', 'Pharmacy', 'B.Pharm', 'Medical'];
+      const isMedical = medicalKeywords.some(k => col.course.toUpperCase().includes(k.toUpperCase()));
+      const isEngineering = !isMedical;
+      
+      const courseMatch = (() => {
+        if (exam === 'NEET' || exam === 'PCB') return isMedical;
+        if (exam === 'JEE' || exam === 'PCM') return isEngineering;
+        return true;
+      })();
+
+      // Ranking logic: 
+      // For Rank (NEET, JEE): Lower is better. Cutoff Rank >= User Rank
+      // For Score/Percentile (PCM, PCB): Higher is better. User Score >= Cutoff Score
+      const rankMatch = (exam === 'PCM' || exam === 'PCB') 
+        ? numRank >= col.closingRank 
+        : col.closingRank >= numRank;
+      
+      return quotaMatch && categoryMatch && courseMatch && rankMatch;
+    }).sort((a, b) => {
+      if (exam === 'PCM' || exam === 'PCB') {
+        return b.closingRank - a.closingRank; // Higher score first
+      }
+      return a.closingRank - b.closingRank; // Lower rank first
+    });
   }, [rank, track, category, exam, firestoreCutoffs]);
+
+  const exportPredictedToExcel = useCallback(async () => {
+    if (filteredResults.length === 0) return;
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      const dataToExport: Record<string, string | number>[] = filteredResults.map(col => ({
+        'College Name': col.collegeName,
+        'Course': col.course,
+        'Category': col.category,
+        'Closing Rank': col.closingRank,
+        'Quota': col.quota,
+        'State': col.state
+      }));
+
+      // Add Footer with User Details & Search Params
+      dataToExport.push({}); // Space
+      dataToExport.push({ 'College Name': 'SEARCH PARAMETERS' });
+      dataToExport.push({ 'College Name': 'Exam Type', 'Course': exam });
+      dataToExport.push({ 'College Name': 'Rank', 'Course': rank });
+      dataToExport.push({ 'College Name': 'Category', 'Course': category });
+      dataToExport.push({ 'College Name': 'Track', 'Course': track === 'AIQ' ? 'All India Quota' : 'State Quota' });
+      
+      if (exam === 'JEE' || exam === 'PCM') {
+        const [p, c, m] = pcm.split(',');
+        dataToExport.push({ 'College Name': 'Physics (%)', 'Course': p || 'N/A' });
+        dataToExport.push({ 'College Name': 'Chemistry (%)', 'Course': c || 'N/A' });
+        dataToExport.push({ 'College Name': 'Mathematics (%)', 'Course': m || 'N/A' });
+      } else if (exam === 'NEET' || exam === 'PCB') {
+        const [p, c, b] = pcb.split(',');
+        dataToExport.push({ 'College Name': 'Physics (%)', 'Course': p || 'N/A' });
+        dataToExport.push({ 'College Name': 'Chemistry (%)', 'Course': c || 'N/A' });
+        dataToExport.push({ 'College Name': 'Biology (%)', 'Course': b || 'N/A' });
+      }
+      
+      dataToExport.push({}); // Space
+      dataToExport.push({ 'College Name': 'USER DETAILS' });
+      dataToExport.push({ 'College Name': 'Name', 'Course': userProfile?.name || user?.displayName || '' });
+      dataToExport.push({ 'College Name': 'Email', 'Course': userProfile?.email || user?.email || '' });
+      dataToExport.push({ 'College Name': 'Mobile', 'Course': userProfile?.phone || '' });
+      dataToExport.push({ 'College Name': 'Export Date', 'Course': new Date().toLocaleString() });
+
+      const ws = XLSX.utils.json_to_sheet(dataToExport);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Predicted Colleges");
+      
+      const fileName = `Prediction_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+
+      // Save to Database History
+      const nowAt = Date.now();
+      const historyRef = collection(db, 'users', user.uid, 'prediction_history');
+      const historyEntry: PredictionHistory = {
+        userId: user.uid,
+        timestamp: nowAt,
+        searchParams: {
+          rank: parseFloat(rank),
+          category,
+          exam,
+          track,
+          pcm: (exam === 'JEE' || exam === 'PCM') ? pcm : undefined,
+          pcb: (exam === 'NEET' || exam === 'PCB') ? pcb : undefined
+        },
+        colleges: filteredResults
+      };
+      await addDoc(historyRef, historyEntry);
+
+    } catch (error) {
+      console.error("Prediction export failed:", error);
+      handleFirestoreError(error, 'write', `/users/${user.uid}/prediction_history`);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [user, filteredResults, exam, rank, category, track, userProfile, pcm, pcb]);
+
+  const exportShortlistToExcel = useCallback(() => {
+    if (shortlistedColleges.length === 0) return;
+    setIsExporting(true);
+
+    try {
+      const dataToExport: Record<string, string | number>[] = shortlistedColleges.map(col => ({
+        'College Name': col.collegeName,
+        'Course': col.course,
+        'Category': col.category,
+        'Closing Rank': col.closingRank,
+        'Quota': col.quota,
+        'State': col.state,
+        'Saved On': new Date(col.savedAt).toLocaleDateString()
+      }));
+
+      // Add user info if available
+      if (userProfile) {
+        dataToExport.push({}); // Blank row
+        dataToExport.push({
+          'College Name': 'USER DETAILS',
+          'Course': '',
+          'Category': '',
+          'Closing Rank': '',
+          'Quota': '',
+          'State': '',
+          'Saved On': ''
+        });
+        dataToExport.push({
+          'College Name': 'Name',
+          'Course': userProfile.name,
+          'Category': '',
+          'Closing Rank': '',
+          'Quota': '',
+          'State': '',
+          'Saved On': ''
+        });
+        dataToExport.push({
+          'College Name': 'Email',
+          'Course': userProfile.email,
+          'Category': '',
+          'Closing Rank': '',
+          'Quota': '',
+          'State': '',
+          'Saved On': ''
+        });
+        dataToExport.push({
+          'College Name': 'Rank/Score',
+          'Course': rank.toString(),
+          'Category': category,
+          'Closing Rank': '',
+          'Quota': '',
+          'State': '',
+          'Saved On': ''
+        });
+      }
+
+      const ws = XLSX.utils.json_to_sheet(dataToExport);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Shortlisted Colleges");
+      
+      const fileName = `${userProfile?.name || 'User'}_College_Shortlist_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+    } catch (error) {
+      console.error("Excel export failed:", error);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [shortlistedColleges, userProfile, rank, category]);
+
+  const handleConsultationSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!consultationName || !consultationMobile) return;
+    
+    setIsSubmittingConsultation(true);
+    try {
+      const requestRef = collection(db, 'consultation_requests');
+      await addDoc(requestRef, {
+        name: consultationName,
+        mobile: consultationMobile,
+        userId: user?.uid || null,
+        timestamp: Date.now()
+      });
+      setShowConsultationSuccess(true);
+      setConsultationName('');
+      setConsultationMobile('');
+      setTimeout(() => setShowConsultationSuccess(false), 5000);
+    } catch (error) {
+      console.error("Consultation request failed:", error);
+      handleFirestoreError(error, 'write', '/consultation_requests');
+    } finally {
+      setIsSubmittingConsultation(false);
+    }
+  };
 
   const notifications = [
     "NEET 2024 Registration Deadline Extended to June 15th!",
@@ -215,7 +485,7 @@ export default function App() {
               </>
             ) : (
               <button 
-                onClick={login}
+                onClick={() => setShowAuthModal(true)}
                 className="bg-blue-700 hover:bg-blue-800 text-white font-bold py-2 px-6 rounded shadow-md transition-all text-sm uppercase tracking-wider"
               >
                 Login
@@ -299,18 +569,28 @@ export default function App() {
                   </select>
                 </div>
 
-                <div className="flex items-end">
+                <div className="flex items-end gap-2">
                   <button 
                     onClick={() => setShowResults(true)}
                     disabled={!rank || firestoreCutoffs.length === 0}
-                    className="w-full bg-blue-700 hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold py-2 rounded shadow-md transition-all text-sm uppercase tracking-wide flex items-center justify-center gap-2"
+                    className="flex-1 bg-blue-700 hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold py-2 rounded shadow-md transition-all text-sm uppercase tracking-wide flex items-center justify-center gap-2"
                   >
                     {isSeeding ? '...' : (firestoreCutoffs.length === 0 ? 'No Data' : 'Analyze')}
                   </button>
+                  {showResults && filteredResults.length > 0 && (
+                    <button 
+                      onClick={exportPredictedToExcel}
+                      disabled={isExporting}
+                      className="bg-green-600 hover:bg-green-700 text-white p-2 rounded shadow-md transition-all flex items-center justify-center"
+                      title="Download Excel"
+                    >
+                      {isExporting ? <span className="animate-spin h-4 w-4 border-2 border-white/30 border-t-white rounded-full"></span> : <Download size={18} />}
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* PCM/PCB SECTION (New) */}
+              {/* PCM/PCB SECTION (Refined) */}
               <motion.div 
                 initial={false}
                 animate={{ height: ['NEET', 'JEE', 'PCM', 'PCB'].includes(exam) ? 'auto' : 0, opacity: 1 }}
@@ -318,7 +598,7 @@ export default function App() {
               >
                 <div className="flex items-center gap-2 mb-4">
                   <CheckCircle size={14} className="text-blue-600" />
-                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Academic Prerequisites (Optional)</h4>
+                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Academic Prerequisites (Aggregate %)</h4>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="space-y-1">
@@ -349,7 +629,7 @@ export default function App() {
                       className="w-full bg-slate-50 border border-slate-200 rounded p-2 text-sm font-medium outline-none focus:border-blue-500 transition-colors" 
                     />
                   </div>
-                  {(exam !== 'JEE' && exam !== 'PCM') && (
+                  {(exam === 'NEET' || exam === 'PCB') && (
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-slate-500 uppercase">Biology (%)</label>
                       <input 
@@ -361,7 +641,7 @@ export default function App() {
                       />
                     </div>
                   )}
-                  {(exam !== 'NEET' && exam !== 'PCB') && (
+                  {(exam === 'JEE' || exam === 'PCM') && (
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-slate-500 uppercase">Mathematics (%)</label>
                       <input 
@@ -400,11 +680,23 @@ export default function App() {
                   exit={{ opacity: 0, y: 10 }}
                   className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex-1 flex flex-col"
                 >
-                  <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                    <h3 className="text-sm font-bold text-slate-700">Historical Analysis: Predicted Admissions</h3>
-                    <span className="text-[10px] text-slate-400 font-medium uppercase tracking-widest flex items-center gap-2">
-                       <CheckCircle size={10} className="text-green-500" /> Based on 2021-2023 Data
-                    </span>
+                  <div className="px-6 py-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/50">
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-sm font-bold text-slate-700">Historical Analysis: Predicted Admissions</h3>
+                      <span className="text-[10px] text-slate-400 font-medium uppercase tracking-widest flex items-center gap-2">
+                         <CheckCircle size={10} className="text-green-500" /> Based on 2021-2023 Data
+                      </span>
+                    </div>
+                    {filteredResults.length > 0 && (
+                      <button 
+                        onClick={exportPredictedToExcel}
+                        disabled={isExporting}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded text-[10px] uppercase tracking-widest flex items-center gap-2 shadow-sm transition-all disabled:bg-slate-300"
+                      >
+                        {isExporting ? <span className="animate-spin h-3 w-3 border-2 border-white/30 border-t-white rounded-full"></span> : <Download size={14} />}
+                        Download Results (Excel)
+                      </button>
+                    )}
                   </div>
 
                   <div className="overflow-x-auto flex-1">
@@ -414,26 +706,39 @@ export default function App() {
                           <th className="px-6 py-3">Institution Name</th>
                           <th className="px-6 py-3">Course</th>
                           <th className="px-6 py-3">Closing Rank</th>
-                          <th className="px-6 py-3 text-right">Probability</th>
+                          <th className="px-6 py-3">Probability</th>
+                          <th className="px-6 py-3 text-right">Shortlist</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredResults.length > 0 ? (
-                          filteredResults.map((col, idx) => (
-                            <tr key={col.id} className="hover:bg-blue-50/30 transition-colors group cursor-pointer">
-                              <td className="px-6 py-4">
-                                <p className="font-bold text-sm text-slate-700 group-hover:text-blue-700 transition-colors">{col.collegeName}</p>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter mt-0.5">{col.state}</p>
-                              </td>
-                              <td className="px-6 py-4 text-sm text-slate-500 font-medium">{col.course}</td>
-                              <td className="px-6 py-4 text-sm font-mono text-slate-600 font-bold">{col.closingRank.toLocaleString()}</td>
-                              <td className="px-6 py-4 text-right">
-                                <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${idx < 3 ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-                                  {idx < 3 ? '94% SAFE' : 'BORDERLINE'}
-                                </span>
-                              </td>
-                            </tr>
-                          ))
+                          filteredResults.map((col, idx) => {
+                            const isShortlisted = shortlistedColleges.some(c => c.id === col.id);
+                            return (
+                              <tr key={col.id} className="hover:bg-blue-50/30 transition-colors group cursor-pointer">
+                                <td className="px-6 py-4">
+                                  <p className="font-bold text-sm text-slate-700 group-hover:text-blue-700 transition-colors">{col.collegeName}</p>
+                                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter mt-0.5">{col.state}</p>
+                                </td>
+                                <td className="px-6 py-4 text-sm text-slate-500 font-medium">{col.course}</td>
+                                <td className="px-6 py-4 text-sm font-mono text-slate-600 font-bold">{col.closingRank.toLocaleString()}</td>
+                                <td className="px-6 py-4">
+                                  <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${idx < 3 ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                                    {idx < 3 ? '94% SAFE' : 'BORDERLINE'}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-right">
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); toggleShortlist(col); }}
+                                    className={`p-2 rounded-full transition-all ${isShortlisted ? 'text-amber-500 bg-amber-50' : 'text-slate-300 hover:text-blue-600 hover:bg-blue-50'}`}
+                                    title={isShortlisted ? "Remove from Shortlist" : "Add to Shortlist"}
+                                  >
+                                    <Star size={18} fill={isShortlisted ? "currentColor" : "none"} />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
                         ) : (
                           <tr>
                             <td colSpan={4} className="px-6 py-20 text-center">
@@ -459,22 +764,122 @@ export default function App() {
             </AnimatePresence>
 
             {/* QUICK INQUIRY FORM (Refined for Polish Theme) */}
-            <section className="bg-white rounded-xl p-8 border border-slate-200 shadow-sm">
+            <section className="bg-white rounded-xl p-8 border border-slate-200 shadow-sm relative overflow-hidden">
+               <AnimatePresence>
+                 {showConsultationSuccess && (
+                   <motion.div 
+                     initial={{ opacity: 0, scale: 0.9 }}
+                     animate={{ opacity: 1, scale: 1 }}
+                     exit={{ opacity: 0, scale: 0.9 }}
+                     className="absolute inset-0 z-20 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6"
+                   >
+                     <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4">
+                       <CheckCircle size={32} />
+                     </div>
+                     <h3 className="text-xl font-bold text-slate-800 mb-2">Request Received!</h3>
+                     <p className="text-sm text-slate-500 font-medium max-w-xs">Our team will reach out to you soon for your prioritized consultation.</p>
+                     <button 
+                       onClick={() => setShowConsultationSuccess(false)}
+                       className="mt-6 text-xs font-bold text-blue-700 uppercase tracking-widest hover:underline"
+                     >
+                       Close
+                     </button>
+                   </motion.div>
+                 )}
+               </AnimatePresence>
+
                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
                  <div>
                     <h2 className="text-xl font-bold text-slate-800 mb-2">Confused about CAP rounds?</h2>
                     <p className="text-sm text-slate-500 font-medium leading-relaxed">Book a prioritized consultation with our senior advisors. We specialize in seat optimization and preference list strategy.</p>
                  </div>
-                 <form className="space-y-3" onSubmit={(e) => e.preventDefault()}>
-                    <input type="text" placeholder="Full Name" className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded text-sm font-medium outline-none focus:border-blue-500 transition-colors" />
-                    <input type="tel" placeholder="Mobile Number" className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded text-sm font-medium outline-none focus:border-blue-500 transition-colors" />
-                    <button className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded text-xs uppercase tracking-widest transition-all shadow-md">Connect with Expert</button>
+                 <form className="space-y-3" onSubmit={handleConsultationSubmit}>
+                    <input 
+                      type="text" 
+                      placeholder="Full Name" 
+                      required
+                      value={consultationName}
+                      onChange={(e) => setConsultationName(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded text-sm font-medium outline-none focus:border-blue-500 transition-colors" 
+                    />
+                    <input 
+                      type="tel" 
+                      placeholder="Mobile Number" 
+                      required
+                      value={consultationMobile}
+                      onChange={(e) => setConsultationMobile(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded text-sm font-medium outline-none focus:border-blue-500 transition-colors" 
+                    />
+                    <button 
+                      type="submit"
+                      disabled={isSubmittingConsultation}
+                      className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded text-xs uppercase tracking-widest transition-all shadow-md disabled:bg-slate-400 flex items-center justify-center gap-2"
+                    >
+                      {isSubmittingConsultation ? (
+                        <span className="animate-spin h-4 w-4 border-2 border-white/30 border-t-white rounded-full"></span>
+                      ) : 'Connect with Expert'}
+                    </button>
                  </form>
                </div>
             </section>
 
             {/* ADMIN PANEL */}
             {userProfile?.role === 'admin' && <AdminPanel />}
+
+            {/* SAVED SHORTLIST SECTION */}
+            {user && shortlistedColleges.length > 0 && (
+              <section className="bg-white rounded-xl shadow-md border border-amber-200 overflow-hidden relative">
+                <div className="absolute top-0 left-0 w-1 h-full bg-amber-400"></div>
+                <div className="px-8 py-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center text-amber-500 shrink-0">
+                      <Star size={24} fill="currentColor" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-800">My College Shortlist</h3>
+                      <p className="text-sm text-slate-500 font-medium leading-relaxed">
+                        You have <span className="text-blue-700 font-bold">{shortlistedColleges.length} colleges</span> in your priority list.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={exportShortlistToExcel}
+                      disabled={isExporting}
+                      className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg shadow-green-200 transition-all text-xs uppercase tracking-widest flex items-center gap-3 disabled:bg-slate-300 disabled:shadow-none"
+                    >
+                      {isExporting ? <span className="animate-spin h-4 w-4 border-2 border-white/30 border-t-white rounded-full"></span> : <Download size={16} />}
+                      {isExporting ? 'Generating...' : 'Download Excel List'}
+                    </button>
+                    <button 
+                      onClick={() => {
+                        if(confirm("Clear shortlist?")) {
+                          shortlistedColleges.forEach(toggleShortlist);
+                        }
+                      }}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-3 rounded-lg transition-colors border border-slate-200"
+                      title="Clear All"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="bg-slate-50/50 px-8 py-4 border-t border-slate-100 flex flex-wrap gap-2">
+                  {shortlistedColleges.map((col) => (
+                    <div key={col.id} className="bg-white border border-slate-200 px-3 py-1.5 rounded-md flex items-center gap-3 shadow-sm group">
+                      <span className="text-xs font-bold text-slate-700">{col.collegeName}</span>
+                      <button 
+                        onClick={() => toggleShortlist(col)}
+                        className="text-slate-300 hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
           </div>
 
@@ -605,6 +1010,134 @@ export default function App() {
         </div>
         <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">© 2024 Laxmi Counselling Acadamy. All rights reserved.</p>
       </footer>
+
+      {/* AUTH MODAL & REGISTRATION (Advanced Transition UI) */}
+      <AnimatePresence>
+        {showAuthModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !needsRegistration && setShowAuthModal(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            ></motion.div>
+            
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+            >
+              {!needsRegistration ? (
+                /* LOGIN SECTION */
+                <div className="p-8">
+                  <div className="text-center mb-8">
+                    <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-700 mx-auto mb-4">
+                      <Lock size={32} />
+                    </div>
+                    <h3 className="text-2xl font-bold text-slate-800">Welcome Back</h3>
+                    <p className="text-sm text-slate-500 mt-2 font-medium">Access your personalized college predictor</p>
+                  </div>
+
+                  <button 
+                    onClick={login}
+                    className="w-full bg-white border-2 border-slate-200 hover:border-blue-500 transition-all text-slate-700 font-bold py-4 rounded-xl flex items-center justify-center gap-3 group relative overflow-hidden"
+                  >
+                    <div className="absolute inset-0 bg-blue-50 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+                    <div className="relative flex items-center gap-3">
+                      <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
+                      <span>Continue with Google</span>
+                    </div>
+                  </button>
+
+                  <div className="mt-8 pt-6 border-t border-slate-100 text-center">
+                    <p className="text-xs text-slate-400 font-bold uppercase tracking-widest leading-loose">
+                      By continuing, you agree to our<br/>
+                      <span className="text-blue-700 hover:underline cursor-pointer">Terms for Service</span> & <span className="text-blue-700 hover:underline cursor-pointer">Privacy Policy</span>
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                /* REGISTRATION SECTION */
+                <div className="p-8">
+                  <div className="text-center mb-8">
+                    <div className="relative mx-auto w-16 h-16 mb-4">
+                      <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-md border-2 border-white">
+                        <img 
+                          src={user?.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user?.displayName}`} 
+                          alt="" 
+                          className="w-full h-full object-cover" 
+                        />
+                      </div>
+                      <div className="absolute -bottom-1 -right-1 bg-white p-1 rounded-lg shadow-sm border border-slate-100">
+                        <img src="https://www.google.com/favicon.ico" alt="Google" className="w-3 h-3" />
+                      </div>
+                    </div>
+                    <h3 className="text-2xl font-bold text-slate-800">Complete Profile</h3>
+                    <p className="text-xs text-slate-400 mt-1 font-bold uppercase tracking-widest">{user?.email}</p>
+                  </div>
+
+                  <form onSubmit={handleRegistration} className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Full Name</label>
+                      <input 
+                        type="text" 
+                        required
+                        value={registeringData.name}
+                        onChange={(e) => setRegisteringData({...registeringData, name: e.target.value})}
+                        className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl text-sm font-medium focus:border-blue-500 outline-none transition-all"
+                        placeholder="Your full name"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Mobile Number</label>
+                      <input 
+                        type="tel" 
+                        required
+                        value={registeringData.phone}
+                        onChange={(e) => setRegisteringData({...registeringData, phone: e.target.value})}
+                        className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl text-sm font-medium focus:border-blue-500 outline-none transition-all"
+                        placeholder="e.g. 9876543210"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Category</label>
+                      <select 
+                        value={registeringData.category}
+                        onChange={(e) => setRegisteringData({...registeringData, category: e.target.value})}
+                        className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl text-sm font-medium focus:border-blue-500 outline-none transition-all appearance-none"
+                      >
+                        <option>General</option>
+                        <option>OBC-NCL</option>
+                        <option>SC/ST</option>
+                        <option>EWS</option>
+                      </select>
+                    </div>
+
+                    <button 
+                      type="submit"
+                      className="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-4 rounded-xl h shadow-xl shadow-blue-200 transition-all text-sm uppercase tracking-widest mt-4"
+                    >
+                      Complete Registration
+                    </button>
+
+                    <button 
+                      type="button"
+                      onClick={() => { logout(); setShowAuthModal(false); }}
+                      className="w-full text-slate-400 hover:text-slate-600 font-bold py-2 text-[10px] uppercase tracking-widest transition-all"
+                    >
+                      Cancel & Logout
+                    </button>
+                  </form>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <style>{`
         @keyframes marquee {

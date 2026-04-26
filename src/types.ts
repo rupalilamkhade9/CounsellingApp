@@ -13,6 +13,7 @@ export interface UserProfile {
   uid: string;
   name: string;
   email: string;
+  phone?: string;
   role: 'student' | 'counselor' | 'admin';
   rank?: number;
   exam?: 'NEET' | 'JEE' | 'PCM' | 'PCB';
@@ -26,4 +27,32 @@ export interface DocumentStatus {
   name: string;
   status: 'Pending' | 'Uploaded' | 'Verified';
   id: string;
+}
+
+export interface ShortlistedCollege extends CutoffData {
+  userId: string;
+  savedAt: number;
+}
+
+export interface PredictionHistory {
+  id?: string;
+  userId: string;
+  timestamp: number;
+  searchParams: {
+    rank: number;
+    category: string;
+    exam: string;
+    track: string;
+    pcm?: string;
+    pcb?: string;
+  };
+  colleges: CutoffData[];
+}
+
+export interface ConsultationRequest {
+  id?: string;
+  userId?: string;
+  name: string;
+  mobile: string;
+  timestamp: number;
 }

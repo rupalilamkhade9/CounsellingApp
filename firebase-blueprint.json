@@ -58,6 +58,46 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["senderId", "receiverId", "text", "timestamp"]
+    },
+    "ShortlistedCollege": {
+      "title": "Shortlisted College",
+      "description": "Colleges saved by a user for their preference list",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "collegeName": { "type": "string" },
+        "course": { "type": "string" },
+        "category": { "type": "string" },
+        "closingRank": { "type": "integer" },
+        "quota": { "type": "string" },
+        "state": { "type": "string" },
+        "savedAt": { "type": "integer" }
+      },
+      "required": ["userId", "collegeName", "course", "savedAt"]
+    },
+    "PredictionHistory": {
+      "title": "Prediction History",
+      "description": "Records of searches and their results exported as Excel",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "searchParams": { "type": "object" },
+        "colleges": { "type": "array" }
+      },
+      "required": ["userId", "timestamp", "searchParams", "colleges"]
+    },
+    "ConsultationRequest": {
+      "title": "Consultation Request",
+      "description": "User request for expert counseling consultation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "mobile": { "type": "string" },
+        "timestamp": { "type": "integer" }
+      },
+      "required": ["name", "mobile", "timestamp"]
     }
   },
   "firestore": {
@@ -73,6 +113,14 @@
       "schema": "Document",
       "description": "User uploaded documents"
     },
+    "/users/{userId}/shortlist/{collegeId}": {
+      "schema": "ShortlistedCollege",
+      "description": "User's shortlisted colleges for Excel export"
+    },
+    "/users/{userId}/prediction_history/{historyId}": {
+      "schema": "PredictionHistory",
+      "description": "History of user exported predictions"
+    },
     "/chats/{chatId}/messages/{messageId}": {
       "schema": "ChatMessage",
       "description": "Messages in a specific chat session"
@@ -80,6 +128,10 @@
     "/admins/{adminId}": {
       "schema": { "type": "object", "properties": { "email": { "type": "string" } } },
       "description": "Administrative access control documents"
+    },
+    "/consultation_requests/{requestId}": {
+      "schema": "ConsultationRequest",
+      "description": "Requests for expert consultation"
     }
   }
 }
